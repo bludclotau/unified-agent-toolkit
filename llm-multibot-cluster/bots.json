@@ -1,0 +1,28 @@
+{
+  "bots": [
+    {
+      "name": "tabatha",
+      "directory": "tabatha",
+      "service": "tabatha.service",
+      "persona": "tabatha/personas/tabatha.txt",
+      "channels": ["1503348313397923871", "1504438057103790120"],
+      "model": "dolphin-2.8-mistral-7b-v02"
+    },
+    {
+      "name": "wendy",
+      "directory": "wendy",
+      "service": "wendy.service",
+      "persona": "wendy/personas/wendy.txt",
+      "channels": ["1503348313397923871", "1503348313397923872", "1504438057103790120"],
+      "model": "dolphin-2.8-mistral-7b-v02"
+    },
+    {
+      "name": "gumbo",
+      "directory": "gumbo",
+      "service": "gumbo.service",
+      "persona": "gumbo/personas/gumbo.txt",
+      "channels": ["1503348313397923871", "1504438057103790120"],
+      "model": "dolphin-2.8-mistral-7b-v02"
+    }
+  ]
+}

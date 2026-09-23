@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+requests
+pyyaml
+psycopg2-binary
+playwright

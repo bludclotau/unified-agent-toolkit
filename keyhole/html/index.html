@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LAN LLM Chat</title>
+  <style>
+    :root {
+      --bg: #12110f;
+      --bg-2: #1b1916;
+      --bg-3: #24211c;
+      --bg-4: #2d2923;
+      --line: #3a342c;
+      --ink: #ece6d8;
+      --muted: #9a917f;
+      --amber: #e3a857;
+      --green: #8fbf7a;
+      --red: #d46a5c;
+      --blue: #7aa7c7;
+      --side: 300px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: "Segoe UI", "IBM Plex Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      display: grid;
+      grid-template-columns: var(--side) 1fr;
+      min-height: 100%;
+    }
+    button, textarea, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    .side {
+      background: var(--bg-2);
+      border-right: 1px solid var(--line);
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      overflow: auto;
+    }
+    .brand { font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--amber); }
+    .brand small { display: block; color: var(--muted); letter-spacing: 0; text-transform: none; margin-top: 4px; font-size: 12px; }
+    h2 { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+    .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip, .node {
+      text-align: left;
+      background: var(--bg-3);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--ink);
+    }
+    .chip.on, .node.on { border-color: #5a4a2e; outline: 1px solid var(--amber); background: #2a241c; }
+    .chip .meta, .node span { color: var(--muted); font-size: 11px; }
+    .node {
+      width: 100%;
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 8px;
+      display: grid;
+      grid-template-columns: 10px 1fr;
+      gap: 8px 10px;
+      align-items: start;
+    }
+    .node.offline { opacity: 0.55; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-top: 5px; display: inline-block; }
+    .dot.ok { background: var(--green); }
+    .dot.bad { background: var(--red); }
+    .dot.wait { background: var(--amber); }
+    .dot.busy { background: var(--amber); }
+    .node b { display: block; font-size: 13px; }
+    .node span { grid-column: 2; }
+    .threads { display: flex; flex-direction: column; gap: 6px; }
+    .thread {
+      text-align: left;
+      background: var(--bg-3);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      align-items: start;
+    }
+    .thread.on { outline: 1px solid var(--amber); }
+    .thread .when { color: var(--muted); font-size: 11px; display: block; margin-top: 2px; }
+    .thread .del { background: none; border: 0; color: var(--muted); padding: 0 2px; font-size: 14px; }
+    .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .top {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 18px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .tabs { display: flex; gap: 4px; }
+    .tab {
+      border: 1px solid transparent;
+      background: none;
+      border-radius: 8px;
+      padding: 6px 10px;
+      color: var(--muted);
+    }
+    .tab.on { color: var(--ink); border-color: var(--line); background: var(--bg-3); }
+    .pill {
+      font-size: 12px;
+      border: 1px solid var(--line);
+      background: var(--bg-3);
+      border-radius: 999px;
+      padding: 4px 10px;
+      color: var(--muted);
+    }
+    .pill.ok { color: var(--green); }
+    .pill.bad { color: var(--red); }
+    .grow { flex: 1; }
+    .ghost, .send {
+      border: 1px solid var(--line);
+      background: var(--bg-3);
+      border-radius: 8px;
+      padding: 7px 12px;
+    }
+    .send { background: var(--amber); color: #1a140c; font-weight: 650; border-color: transparent; }
+    .send:disabled, .ghost:disabled { opacity: 0.45; cursor: not-allowed; }
+    .menu { display: none; }
+    .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
+    .view.on { display: flex; }
+    .chats {
+      flex: 1;
+      overflow: auto;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .msg { max-width: 900px; }
+    .msg .who { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; display: flex; gap: 8px; align-items: baseline; }
+    .msg.user .who { color: var(--blue); }
+    .msg.assistant .who { color: var(--amber); }
+    .msg .who .meta { letter-spacing: 0; text-transform: none; color: var(--muted); }
+    .bubble {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.45;
+    }
+    .msg.user .bubble { background: #1c2430; }
+    .bubble pre {
+      background: #0e0d0b;
+      overflow: auto;
+      padding: 10px;
+      border-radius: 8px;
+      white-space: pre;
+    }
+    .bubble code { font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace; font-size: 0.92em; }
+    .composer {
+      border-top: 1px solid var(--line);
+      padding: 12px 18px 16px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+    }
+    textarea {
+      width: 100%;
+      min-height: 72px;
+      max-height: 240px;
+      resize: vertical;
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    label { font-size: 12px; color: var(--muted); }
+    input[type=number], input[type=text], input[type=url] {
+      background: var(--bg-3);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 4px 8px;
+      width: 84px;
+    }
+    input[type=text], input[type=url] { width: 100%; }
+    .sys { width: 100%; display: block; }
+    .check { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
+    .err { color: var(--red); font-size: 13px; }
+    .empty { color: var(--muted); margin: auto; text-align: center; max-width: 480px; line-height: 1.5; }
+    .hint { color: var(--muted); font-size: 12px; margin: 6px 2px 0; }
+    .panel { flex: 1; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+    .card {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .card h3 { margin: 0 0 8px; font-size: 15px; }
+    .kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 12px; font-size: 13px; }
+    .kv span { color: var(--muted); }
+    .slots { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .slot {
+      min-width: 72px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 11px;
+      background: var(--bg-3);
+    }
+    .slot.busy { outline: 1px solid var(--amber); }
+    .prompt {
+      white-space: pre-wrap;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      max-height: 220px;
+      overflow: auto;
+      margin: 8px 0;
+    }
+    .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+    .result {
+      background: #0e0d0b;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 280px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+    }
+    .typing::after {
+      content: "…";
+      animation: blink 1.1s steps(3, end) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0.2; } }
+    @media (max-width: 800px) {
+      body { grid-template-columns: 1fr; }
+      .side { display: none; border-right: 0; border-bottom: 1px solid var(--line); max-height: 55vh; }
+      body.nav .side { display: flex; }
+      .menu { display: inline-flex; }
+    }
+  </style>
+</head>
+<body>
+  <aside class="side">
+    <div class="brand">LAN LLM Chat<small>velma · llama.cpp + gguf-router</small></div>
+    <div>
+      <h2>Conversations</h2>
+      <div class="threads" id="threads"></div>
+      <button class="ghost" id="newChat" type="button" style="margin-top:8px;width:100%">New chat</button>
+    </div>
+    <div>
+      <h2>Nodes</h2>
+      <div id="models"></div>
+      <p class="hint">Toggle one or more for direct streaming. Persona/task pick a node when none are toggled.</p>
+    </div>
+    <div>
+      <h2>Personas</h2>
+      <div class="chip-row" id="personas"></div>
+    </div>
+    <div>
+      <h2>Tasks</h2>
+      <div class="chip-row" id="tasks"></div>
+    </div>
+    <div>
+      <h2>Sampling</h2>
+      <div class="row" style="margin-bottom:8px">
+        <label>temp <input id="temp" type="number" min="0" max="2" step="0.05" value="0.8"></label>
+        <label>max tokens <input id="maxTok" type="number" min="16" max="8192" step="16" value="512"></label>
+      </div>
+      <label class="sys">system fallback
+        <input id="system" type="text" value="You are a helpful assistant running on a local llama.cpp node.">
+      </label>
+      <label class="check" style="margin-top:8px">
+        <input id="viaRouter" type="checkbox">
+        send via /route (Discord path, no stream)
+      </label>
+    </div>
+  </aside>
+  <section class="main">
+    <header class="top">
+      <button class="ghost menu" id="menu" type="button">Menu</button>
+      <nav class="tabs" id="tabs">
+        <button class="tab on" data-view="chat" type="button">Chat</button>
+        <button class="tab" data-view="cluster" type="button">Cluster</button>
+        <button class="tab" data-view="personas" type="button">Personas</button>
+        <button class="tab" data-view="tools" type="button">Tools</button>
+      </nav>
+      <div id="selPills" class="grow"></div>
+      <span class="pill" id="healthPill">cluster…</span>
+      <button class="ghost" id="stop" type="button" disabled>Stop</button>
+    </header>
+
+    <div class="view on" id="view-chat">
+      <div class="chats" id="chats">
+        <div class="empty">Pick a node or persona, then send a message. Direct mode streams from llama.cpp. Personas use the prompts from gguf-router.</div>
+      </div>
+      <form class="composer" id="form">
+        <textarea id="prompt" placeholder="Message the selected node(s)…" required></textarea>
+        <button class="send" id="send" type="submit">Send</button>
+      </form>
+    </div>
+
+    <div class="view" id="view-cluster">
+      <div class="panel" id="cluster"></div>
+    </div>
+
+    <div class="view" id="view-personas">
+      <div class="panel">
+        <p class="hint">From <span class="mono">router/persona_prompts.yaml</span> and <span class="mono">personas.json</span>. Click a card to chat as that persona.</p>
+        <div class="grid2" id="personaCards"></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-tools">
+      <div class="panel">
+        <div class="card">
+          <h3>web_fetch</h3>
+          <p class="hint">POST /tool on gguf-router. Playwright runs on snerloc. Discord: <span class="mono">@bot !web URL</span></p>
+          <div class="row" style="margin:10px 0">
+            <input id="toolUrl" type="url" placeholder="https://…" style="flex:1;min-width:200px">
+            <button class="ghost" id="toolFetch" type="button">Fetch</button>
+            <button class="ghost" id="toolAttach" type="button">Attach to chat</button>
+          </div>
+          <div class="result" id="toolOut">No fetch yet.</div>
+        </div>
+        <div class="card">
+          <h3>POST /route</h3>
+          <p class="hint">Same contract the Discord bots use. Router picks the model, prepends the persona prompt, logs to Postgres, 2s cooldown.</p>
+          <label class="sys">prompt
+            <input id="routePrompt" type="text" placeholder="test">
+          </label>
+          <div class="row" style="margin:8px 0">
+            <label>user_id <input id="routeUser" type="text" value="lan-chat" style="width:140px"></label>
+            <label>bot_name <input id="routeBot" type="text" value="lan-chat" style="width:140px"></label>
+            <label>n_predict <input id="routeN" type="number" min="8" max="2048" value="128"></label>
+            <button class="send" id="routeSend" type="button">Route</button>
+          </div>
+          <div class="result" id="routeOut">Waiting.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <script src="/core.js"></script>
+  <script src="/ui.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

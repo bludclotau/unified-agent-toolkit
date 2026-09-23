@@ -1,0 +1,19 @@
+{
+  "nodes": [
+    { "id": "qwen", "name": "Qwen", "host": "10.1.1.122:8081" },
+    { "id": "dolphin", "name": "Dolphin", "host": "10.1.1.122:8082" }
+  ],
+  "personas": {
+    "wendy": "dolphin",
+    "gumbo": "dolphin",
+    "tabatha": "dolphin",
+    "tech": "qwen",
+    "creative": "dolphin",
+    "analysis": "qwen"
+  },
+  "tasks": {
+    "code": "qwen",
+    "story": "dolphin",
+    "general": "qwen"
+  }
+}

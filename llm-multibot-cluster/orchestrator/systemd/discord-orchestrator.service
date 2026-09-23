@@ -1,0 +1,17 @@
+[Unit]
+Description=Discord multi-bot orchestrator
+After=network-online.target postgresql.service gguf-router.service
+Wants=network-online.target
+
+[Service]
+User=wendy
+Group=discordbots
+WorkingDirectory=/home/wendy/waffle_house/llm-multibot-cluster/orchestrator
+EnvironmentFile=/etc/discord-bots/orchestrator.env
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

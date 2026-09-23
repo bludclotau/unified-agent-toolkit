@@ -1,0 +1,14 @@
+[Unit]
+Description=Annalise Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=snerloc
+WorkingDirectory=/home/snerloc/discord-bots/bot6
+ExecStart=/usr/bin/node bot.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

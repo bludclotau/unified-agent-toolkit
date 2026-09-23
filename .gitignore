@@ -1,0 +1,12 @@
+.env
+*.env
+!.env.example
+!**/.env.example
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+*.pem
+*.gguf
+memory.json
+.opencode_sanity
