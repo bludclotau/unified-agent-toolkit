@@ -54,4 +54,4 @@ podman compose up -d
 
 ## Cloned integrations
 
-browser-use, browser-agent, agent-browser, derpr-python, aizen, and letta are not copied into this repo. Notes on where they sit and how the orchestrator treats them are in [docs/integrations.md](docs/integrations.md).
+browser-use, browser-agent, and agent-browser are wired from the router and Keyhole. agent-browser is the primary executor, with one restored session per persona. browser-use is not loaded into the router. derpr-python, aizen, and letta are still not started. Details are in [docs/integrations.md](docs/integrations.md).

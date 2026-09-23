@@ -322,13 +322,54 @@
       <div class="panel">
         <div class="card">
           <h3>web_fetch</h3>
-          <p class="hint">POST /tool on gguf-router. Playwright runs on snerloc. Discord: <span class="mono">@bot !web URL</span></p>
+          <p class="hint">POST /tool on gguf-router. web_fetch is a one-shot page read. Browser actions below need the API token. Discord chat cannot start them.</p>
           <div class="row" style="margin:10px 0">
             <input id="toolUrl" type="url" placeholder="https://…" style="flex:1;min-width:200px">
             <button class="ghost" id="toolFetch" type="button">Fetch</button>
             <button class="ghost" id="toolAttach" type="button">Attach to chat</button>
           </div>
           <div class="result" id="toolOut">No fetch yet.</div>
+        </div>
+        <div class="card">
+          <h3>Browser</h3>
+          <p class="hint">agent-browser is the primary executor, one session per persona, behind gguf-router. Discord chat cannot call these. The token is the orchestrator API token and stays in this tab.</p>
+          <div class="row" style="margin:10px 0">
+            <input id="toolToken" type="password" placeholder="API token" style="flex:1;min-width:160px" autocomplete="off">
+            <button class="ghost" id="integrationRefresh" type="button">Status</button>
+          </div>
+          <div class="result" id="integrationStatus">No status yet.</div>
+          <div class="row" style="margin:10px 0">
+            <label>persona <input id="browserPersona" type="text" value="wendy" style="width:110px"></label>
+            <label>action
+              <select id="browserAction">
+                <option value="browser_goto">goto</option>
+                <option value="browser_read">read</option>
+                <option value="browser_click">click</option>
+                <option value="browser_type">type</option>
+                <option value="browser_submit">submit</option>
+                <option value="browser_login">login</option>
+                <option value="browser_close">close</option>
+                <option value="browser_plan">plan</option>
+              </select>
+            </label>
+          </div>
+          <div class="row" style="margin:8px 0">
+            <input id="browserUrl" type="url" placeholder="https://…" style="flex:1;min-width:180px">
+            <input id="browserRef" type="text" placeholder="@e1" style="width:90px">
+            <input id="browserText" type="text" placeholder="text or goal" style="flex:1;min-width:140px">
+          </div>
+          <div class="row" style="margin:8px 0">
+            <input id="browserUser" type="text" placeholder="username" style="width:140px">
+            <input id="browserPass" type="password" placeholder="password" style="width:140px" autocomplete="off">
+            <input id="browserUserRef" type="text" placeholder="@user" style="width:80px">
+            <input id="browserPassRef" type="text" placeholder="@pass" style="width:80px">
+            <button class="send" id="browserRun" type="button">Run</button>
+          </div>
+          <div class="row" style="margin:8px 0">
+            <button class="ghost" id="agentSnapshot" type="button">agent-browser snapshot</button>
+            <button class="ghost" id="agentCliSnapshot" type="button">browser-agent snapshot</button>
+          </div>
+          <div class="result" id="browserOut">No browser action yet.</div>
         </div>
         <div class="card">
           <h3>POST /route</h3>

@@ -1,3 +1,5 @@
+import hmac
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -5,13 +7,14 @@ from typing import Any, Optional
 import json
 import yaml
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import db
 from cleaner import clean_output
 from persona_engine import apply
-from tools.registry import run_tool
+from tools.browser import redact
+from tools.registry import run_tool, tool_catalog
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -91,26 +94,50 @@ def extract_raw_text(payload: Any) -> str:
     return json.dumps(payload)
 
 
+def _browser_gate(name: Optional[str], request: Request) -> None:
+    """Discord has no tool token. Keyhole sends the same bearer as the control API."""
+    if not name or not str(name).startswith("browser_"):
+        return
+    expected = os.environ.get("TOOL_API_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="TOOL_API_TOKEN is not configured")
+    provided = request.headers.get("x-tool-token", "")
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        provided = provided or auth[7:].strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "router-ok"}
+    catalog = tool_catalog()
+    return {"status": "router-ok", "tools": catalog["tools"], "browser": catalog["browser"]}
+
+
+@app.get("/tools")
+def tools() -> dict[str, Any]:
+    return tool_catalog()
 
 
 @app.post("/tool")
-def tool(payload: dict) -> Any:
+def tool(payload: dict, request: Request) -> Any:
     name = payload.get("tool")
     args = payload.get("args", {}) or {}
     user_id = payload.get("user_id", "unknown")
     bot_name = payload.get("bot_name", "discord")
+    persona = payload.get("persona") or bot_name or "default"
+    _browser_gate(name, request)
 
-    result = run_tool(name, args)
-    db.async_write(db.save_raw_output, f"tool:{user_id}:{name}", str(result))
-    db.log_tool(user_id, name, str(result))
-    return {"result": result, "user_id": user_id, "bot_name": bot_name}
+    result = run_tool(name, args, persona=persona)
+    safe = redact(result)
+    db.async_write(db.save_raw_output, f"tool:{user_id}:{name}", str(safe))
+    db.log_tool(user_id, name, str(safe))
+    return {"result": safe, "user_id": user_id, "bot_name": bot_name, "persona": persona}
 
 
 @app.post("/route")
-def route(payload: RouteRequest) -> Any:
+def route(payload: RouteRequest, request: Request) -> Any:
     prompt = payload.prompt
     persona = payload.persona
     task = payload.task
@@ -123,9 +150,12 @@ def route(payload: RouteRequest) -> Any:
     tool_name = payload.tool
     tool_result = None
     if tool_name:
-        tool_result = run_tool(tool_name, payload.args or {})
-        db.async_write(db.save_raw_output, f"tool:{user_id}:{tool_name}", str(tool_result))
-        db.log_tool(user_id, tool_name, str(tool_result))
+        _browser_gate(tool_name, request)
+        tool_result = run_tool(tool_name, payload.args or {}, persona=persona or bot_name)
+        safe_tool = redact(tool_result)
+        db.async_write(db.save_raw_output, f"tool:{user_id}:{tool_name}", str(safe_tool))
+        db.log_tool(user_id, tool_name, str(safe_tool))
+        tool_result = safe_tool
 
     final_prompt, model = apply(
         persona,

@@ -2,8 +2,6 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 
-const HTTP_URL = /^https?:\/\/[^\s]+$/i;
-
 function exists(dir) {
   try {
     return fs.statSync(dir).isDirectory();
@@ -34,9 +32,78 @@ async function ping(url, timeoutMs = 2000) {
   }
 }
 
-function runCommand(bin, args, { cwd, timeoutMs = 30000 } = {}) {
+function sessionName(persona) {
+  const cleaned = String(persona || "control")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `gguf-${(cleaned || "control").slice(0, 40)}`;
+}
+
+function requireHttp(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("url must be http or https");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("url must be http or https");
+  }
+  if (parsed.username || parsed.password) throw new Error("url must not contain credentials");
+  return url;
+}
+
+function requireRef(ref) {
+  const value = String(ref || "").trim();
+  if (!/^@?[A-Za-z][A-Za-z0-9_:-]{0,63}$/.test(value)) {
+    throw new Error("ref must be an @ref such as @e1");
+  }
+  return value.startsWith("@") ? value : `@${value}`;
+}
+
+function requireText(text) {
+  const value = String(text || "");
+  if (!value.trim() || value.length > 4000 || /[\u0000\n\r]/.test(value)) {
+    throw new Error("text must be a single line");
+  }
+  return value;
+}
+
+function agentBrowserCommands(action, body = {}) {
+  if (action === "open") return [["open", requireHttp(body.url)]];
+  if (action === "close") return [["close"]];
+  if (action === "snapshot") {
+    return body.url ? [["open", requireHttp(body.url)], ["snapshot"]] : [["snapshot"]];
+  }
+  if (action === "read") return body.url ? [["read", requireHttp(body.url)]] : [["read"]];
+  if (action === "click") return [["click", requireRef(body.ref)]];
+  if (action === "fill") return [["fill", requireRef(body.ref), requireText(body.text)]];
+  if (action === "type") return [["type", requireRef(body.ref), requireText(body.text)]];
+  if (action === "press") {
+    const key = String(body.key || "");
+    if (!["Enter", "Tab", "Escape", "Backspace"].includes(key)) throw new Error("key is not allowed");
+    return [["press", key]];
+  }
+  throw new Error("action must be open, snapshot, read, click, fill, type, press, or close");
+}
+
+function directoryHasPrefix(root, prefix) {
+  try {
+    return fs.readdirSync(root).some((name) => name.startsWith(prefix));
+  } catch {
+    return false;
+  }
+}
+
+function runCommand(bin, args, { cwd, timeoutMs = 30000, env } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, {
+      cwd,
+      env: env ? { ...process.env, ...env } : process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -93,32 +160,48 @@ function createIntegrations(config) {
         ...keyhole,
       },
       "browser-use": {
-        role: "Python browser agent. Chat completions stay on the cluster LLM.",
+        role: "Python browser agent. Left out of the router process so it cannot start a second model loop.",
+        primary: false,
+        ready: false,
         ...browserUse,
         entry: browserUse.present && fs.existsSync(path.join(browserUse.dir, "browser_use")),
       },
       "browser-agent": {
-        role: "Playwright agent. Invoke only from the control API.",
+        role: "One-shot accessibility snapshot. Control API only.",
+        primary: false,
         ...browserAgent,
         entry: browserAgent.present && fs.existsSync(path.join(browserAgent.dir, "bin", "agent.ts")),
+        chromium: directoryHasPrefix(path.join(process.env.HOME || "/home/wendy", ".cache/ms-playwright"), "chromium"),
+        ready: directoryHasPrefix(path.join(process.env.HOME || "/home/wendy", ".cache/ms-playwright"), "chromium")
+          && fs.existsSync(path.join(browserAgent.dir, "node_modules", "playwright")),
       },
       "agent-browser": {
-        role: "Browser automation CLI.",
+        role: "Primary browser executor. gguf-router drives it with one session per persona.",
+        primary: true,
         bin: which("agent-browser"),
+        chrome: directoryHasPrefix(path.join(process.env.HOME || "/home/wendy", ".agent-browser/browsers"), "chrome-"),
+        ready: Boolean(which("agent-browser"))
+          && directoryHasPrefix(path.join(process.env.HOME || "/home/wendy", ".agent-browser/browsers"), "chrome-"),
         ...agentBrowserRepo,
       },
       "derpr-python": {
         role: "Separate persona orchestrator. Not auto-started, so it cannot take these Discord tokens.",
+        primary: false,
+        ready: false,
         ...derpr,
         localLlm: config.llmUrl,
       },
       aizen: {
         role: "Local coding agent pointed at the cluster OpenAI-compatible endpoint.",
+        primary: false,
+        ready: false,
         bin: which("aizen"),
         ...aizen,
       },
       letta: {
         role: "Stateful agent memory. Health is probed; chat still uses the cluster LLM.",
+        primary: false,
+        ready: false,
         url: config.lettaUrl,
         ...letta,
         ...lettaRepo,
@@ -130,30 +213,45 @@ function createIntegrations(config) {
     if (name === "agent-browser") {
       const bin = which("agent-browser");
       if (!bin) return { ok: false, error: "agent-browser is not on PATH" };
-      const action = body.action;
-      const url = body.url;
-      if (!["open", "snapshot", "close"].includes(action)) {
-        return { ok: false, error: "action must be open, snapshot, or close" };
+      let commands;
+      try {
+        commands = agentBrowserCommands(body.action, body);
+      } catch (err) {
+        return { ok: false, error: err.message };
       }
-      if (action !== "close" && !HTTP_URL.test(url || "")) {
-        return { ok: false, error: "url must be http or https" };
+      const session = sessionName(body.persona);
+      const steps = [];
+      for (const argv of commands) {
+        const result = await runCommand(bin, ["--session", session, "--restore", ...argv], { timeoutMs: 60000 });
+        steps.push(result);
+        if (result.code !== 0) {
+          return { ok: false, session, steps, stdout: result.stdout, stderr: result.stderr, code: result.code };
+        }
       }
-      const args = action === "close" ? ["close"] : [action, url];
-      const result = await runCommand(bin, args, { timeoutMs: 45000 });
-      return { ok: result.code === 0, ...result };
+      return {
+        ok: true,
+        session,
+        stdout: steps.map((step) => step.stdout).filter(Boolean).join("\n"),
+        steps,
+      };
     }
 
     if (name === "browser-agent") {
       const info = repo("browser-agent");
       const entry = path.join(info.dir, "bin", "agent.ts");
       if (!fs.existsSync(entry)) return { ok: false, error: "browser-agent is not cloned" };
-      const url = body.url;
-      if (!HTTP_URL.test(url || "")) return { ok: false, error: "url must be http or https" };
+      let url;
+      try {
+        url = requireHttp(body.url);
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
       const npx = which("npx");
       if (!npx) return { ok: false, error: "npx is not installed" };
       const result = await runCommand(npx, ["tsx", entry, "snapshot", url], {
         cwd: info.dir,
-        timeoutMs: 60000,
+        timeoutMs: 90000,
+        env: { HEADLESS: "true" },
       });
       return { ok: result.code === 0, ...result };
     }
@@ -172,4 +270,10 @@ function createIntegrations(config) {
   return { status, invoke };
 }
 
-module.exports = { createIntegrations, ping, runCommand };
+module.exports = {
+  createIntegrations,
+  ping,
+  runCommand,
+  agentBrowserCommands,
+  sessionName,
+};

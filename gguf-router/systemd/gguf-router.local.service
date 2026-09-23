@@ -8,6 +8,7 @@ Group=discordbots
 WorkingDirectory=/home/wendy/waffle_house/gguf-router/router
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/home/wendy/waffle_house/gguf-router/.env
+EnvironmentFile=-/etc/gguf-router/tool.env
 ExecStart=/home/wendy/waffle_house/gguf-router/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 9000
 Restart=on-failure
 RestartSec=3
