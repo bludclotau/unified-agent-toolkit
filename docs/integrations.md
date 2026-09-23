@@ -34,13 +34,17 @@ browser-agent stays a one-shot accessibility snapshot (`npx tsx bin/agent.ts sna
 | `browser_click` | `click @ref` |
 | `browser_type` | `fill @ref <text>` |
 | `browser_submit` | `click @ref`, or `press Enter` when no ref is given |
-| `browser_login` | Stores username and password for that persona and origin, then fills the refs. The password is not returned and is not given to the planner. |
+| `browser_login` | Fills the login fixture or a real form, then stores the username and password in `credentials.encrypted_key` as a Fernet token (`enc:v1:…`). The key is `CREDENTIALS_KEY` in `/etc/gguf-router/tool.env`. The password is not returned and is not given to the planner. |
 | `browser_close` | `close` |
 | `browser_plan` | Asks Qwen at `10.1.1.122:8081/completion` for one GBNF-constrained tool call at a time, then runs it on that persona's session. The grammar allows goto, read, click, type, submit, and done. It does not allow login. |
 
 `web_fetch` is unchanged and does not require the token. Extra fields such as `persona` are stripped before it is called.
 
-Logins are written to `/var/lib/gguf-router/browser-creds/gguf-<persona>/logins.json` mode `600`. Postgres tool logs go through the same redaction, so a stored password does not land in `cache` or `tools`.
+Logins are rows in `credentials` (`agent_id`, `site`, `encrypted_key`). `encrypted_key` is `enc:v1:` plus a Fernet token. `CREDENTIALS_KEY` is only in `/etc/gguf-router/tool.env`, which `scripts/bootstrap-browser.sh` creates. That script also installs `agent-browser` and Playwright Chromium when they are missing, and it copies `API_TOKEN` into `TOOL_API_TOKEN` so the two match. `gguf-browser-setup.service` runs the script before the router. A plaintext `logins.json` is removed after a successful save. Postgres tool logs still go through redaction.
+
+`GET /health` and `GET /tools` report `browser.ready` for agent-browser (binary plus Chrome) and `browser.browser_agent.ready` for the Playwright Chromium install. Both are true on this VM after the bootstrap.
+
+The local login fixture is `http://127.0.0.1:9000/debug/login` (wendy / snacktime), then `/debug/secret`. It is not linked from Keyhole.
 
 Persona memory for chat is still `conversations.last_message` from the router database. The planner reads its own step trace for the current call. It does not grow a second memory store.
 
@@ -55,6 +59,16 @@ Persona memory for chat is still `conversations.last_message` from the router da
 ## Keyhole
 
 The Tools tab has a token field (session storage for that tab), a status button for the three browser clones, and a form for the router tools. Two extra buttons call the orchestrator snapshot invokes. The operator is the authenticated party. A raw Discord message is not.
+
+## Install
+
+```bash
+sudo scripts/bootstrap-browser.sh
+sudo systemctl enable --now gguf-browser-setup.service
+sudo systemctl restart gguf-router
+```
+
+The bootstrap is safe to run again. It skips Chrome and Chromium downloads when those directories already exist.
 
 ## Left alone
 

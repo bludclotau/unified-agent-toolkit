@@ -84,36 +84,40 @@ def origin_of(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def persist_login(persona: str, origin: str, payload: dict) -> None:
+    import db
+
+    db.upsert_credential(persona, origin, payload)
+
+
+def fetch_login(persona: str, url: str):
+    import db
+
+    return db.get_credential(persona, url)
+
+
+def retire_plaintext(persona: str) -> None:
+    path = _login_path(persona)
+    if path.is_file():
+        path.unlink()
+
+
 def save_login(persona: str, url: str, username: str, password: str) -> str:
     origin = origin_of(url)
-    path = _login_path(persona)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = {}
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            data = {}
-    if not isinstance(data, dict):
-        data = {}
-    data[origin] = {"username": username, "password": password}
-    path.write_text(json.dumps(data), encoding="utf-8")
-    os.chmod(path, 0o600)
+    persist_login(
+        persona,
+        origin,
+        {"username": username, "password": password, "login_url": url},
+    )
+    retire_plaintext(persona)
     return origin
 
 
 def load_login(persona: str, url: str):
-    path = _login_path(persona)
-    if not path.is_file():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-    row = data.get(origin_of(url)) if isinstance(data, dict) else None
-    if not isinstance(row, dict) or not row.get("password"):
-        return None
-    return row
+    data = fetch_login(persona, url)
+    if isinstance(data, dict) and data.get("password"):
+        return data
+    return None
 
 
 class AgentBrowser:
@@ -219,12 +223,33 @@ def browser_close(persona, browser=None):
     return (browser or AgentBrowser()).sequence(persona, [["close"]])
 
 
-def browser_login(persona, url, username, username_ref, password_ref, submit_ref=None, password=None, browser=None):
+def _refs_from_snapshot(text: str):
+    user = password = submit = None
+    for line in (text or "").splitlines():
+        if "ref=" not in line:
+            continue
+        ref = line.split("ref=")[1].split("]")[0].split(",")[0].strip()
+        if not ref.startswith("@"):
+            ref = f"@{ref}"
+        low = line.lower()
+        if "password" in low and password is None:
+            password = ref
+        elif "button" in low or "submit" in low:
+            submit = ref
+        elif "textbox" in low or "input" in low:
+            if user is None:
+                user = ref
+            elif password is None:
+                password = ref
+    return user, password, submit
+
+
+def browser_login(persona, url, username, username_ref=None, password_ref=None, submit_ref=None, password=None, browser=None):
     try:
         target = check_url(url)
         user = check_text(username, limit=200)
-        user_ref = check_ref(username_ref)
-        pass_ref = check_ref(password_ref)
+        user_ref = check_ref(username_ref) if username_ref else None
+        pass_ref = check_ref(password_ref) if password_ref else None
         submit = check_ref(submit_ref) if submit_ref else None
     except ValueError as exc:
         return _fail(exc)
@@ -246,18 +271,33 @@ def browser_login(persona, url, username, username_ref, password_ref, submit_ref
         secret = stored["password"]
         origin = origin_of(target)
 
-    commands = [
-        ["open", target],
+    runner = browser or AgentBrowser()
+    commands = []
+    # Refs from an earlier snapshot belong to the page already open.
+    # Opening again renumbers them.
+    if not (user_ref and pass_ref):
+        opened = runner.sequence(persona, [["open", target], ["snapshot"]])
+        if not opened.get("ok"):
+            opened["stored"] = True
+            opened["origin"] = origin
+            return redact(opened)
+        found_user, found_pass, found_submit = _refs_from_snapshot(opened.get("stdout") or "")
+        user_ref = user_ref or found_user
+        pass_ref = pass_ref or found_pass
+        submit = submit or found_submit
+        if not user_ref or not pass_ref:
+            return {"ok": False, "stored": True, "origin": origin, "error": "login fields were not in the snapshot"}
+    commands.extend([
         ["fill", user_ref, user],
         ["fill", pass_ref, secret],
-    ]
-    if submit:
-        commands.append(["click", submit])
-    else:
-        commands.append(["press", "Enter"])
-    result = (browser or AgentBrowser()).sequence(persona, commands)
+    ])
+    commands.append(["click", submit] if submit else ["press", "Enter"])
+    result = runner.sequence(persona, commands)
     result["origin"] = origin
     result["stored"] = True
+    if not result.get("ok"):
+        failed = next((step for step in result.get("steps") or [] if not step.get("ok")), {})
+        result["error"] = failed.get("stderr") or failed.get("stdout") or "browser login failed"
     result.pop("steps", None)
     return redact(result)
 
@@ -290,6 +330,13 @@ def execute(persona, name, args, browser=None):
     return {"ok": False, "error": f"unknown browser tool {name}"}
 
 
+def _has_child(root: Path, prefix: str) -> bool:
+    try:
+        return any(path.name.startswith(prefix) for path in root.iterdir())
+    except OSError:
+        return False
+
+
 def binary_status() -> dict:
     binary = os.environ.get("AGENT_BROWSER_BIN", "agent-browser")
     path = binary if os.path.isabs(binary) else None
@@ -299,4 +346,24 @@ def binary_status() -> dict:
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
                 path = candidate
                 break
-    return {"binary": binary, "path": path, "ready": bool(path)}
+    home = Path(os.environ.get("HOME", "/home/wendy"))
+    chrome = _has_child(home / ".agent-browser" / "browsers", "chrome-")
+    chromium_root = home / ".cache" / "ms-playwright"
+    chromium = _has_child(chromium_root, "chromium-")
+    clone = Path(os.environ.get(
+        "BROWSER_AGENT_DIR",
+        "/home/wendy/waffle_house/integrations/browser-agent",
+    ))
+    package = (clone / "node_modules" / "playwright").is_dir()
+    return {
+        "binary": binary,
+        "path": path,
+        "chrome": chrome,
+        "ready": bool(path) and chrome,
+        "browser_agent": {
+            "chromium": chromium,
+            "package": package,
+            "ready": chromium and package,
+            "primary": False,
+        },
+    }

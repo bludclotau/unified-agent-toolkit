@@ -24,3 +24,18 @@ CREATE TABLE IF NOT EXISTS tools (
     tool_state JSONB,
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS agents (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    persona JSONB,
+    capabilities JSONB
+);
+
+CREATE TABLE IF NOT EXISTS credentials (
+    id SERIAL PRIMARY KEY,
+    agent_id INTEGER REFERENCES agents(id) ON DELETE CASCADE,
+    site TEXT NOT NULL,
+    encrypted_key TEXT NOT NULL,
+    UNIQUE (agent_id, site)
+);

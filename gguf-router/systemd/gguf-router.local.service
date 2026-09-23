@@ -1,6 +1,7 @@
 [Unit]
 Description=GGUF Router Service
-After=network.target postgresql.service
+After=network.target postgresql.service gguf-browser-setup.service
+Wants=gguf-browser-setup.service
 
 [Service]
 User=wendy

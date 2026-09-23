@@ -1,10 +1,14 @@
+import json
 import os
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 import psycopg2
 import psycopg2.extras
+
+import cred_crypto
 
 _write_lock = threading.Lock()
 
@@ -40,6 +44,21 @@ CREATE TABLE IF NOT EXISTS tools (
     tool_name TEXT,
     tool_state JSONB,
     updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agents (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    persona JSONB,
+    capabilities JSONB
+);
+
+CREATE TABLE IF NOT EXISTS credentials (
+    id SERIAL PRIMARY KEY,
+    agent_id INTEGER REFERENCES agents(id) ON DELETE CASCADE,
+    site TEXT NOT NULL,
+    encrypted_key TEXT NOT NULL,
+    UNIQUE (agent_id, site)
 );
 """
 
@@ -100,12 +119,121 @@ def _run_write(sql, params):
         cur.close()
 
 
+def _host(site_or_url: str) -> str:
+    raw = (site_or_url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        return raw.lower().split("/")[0]
+    return (urlparse(raw).hostname or "").lower()
+
+
+def ensure_agent(name):
+    if not name:
+        name = "unknown"
+    name = str(name).lower()
+    persona = json.dumps({"label": name})
+    caps = json.dumps(["browser", "web_fetch"])
+    with _write_lock:
+        cur = _cursor()
+        cur.execute(
+            """
+            INSERT INTO agents (name, persona, capabilities)
+            VALUES (%s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (name) DO UPDATE
+            SET capabilities = EXCLUDED.capabilities
+            RETURNING id
+            """,
+            (name, persona, caps),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+    return int(row[0]) if row else None
+
+
+def upsert_credential(agent_name, site, payload):
+    """Encrypt username/password into credentials.encrypted_key."""
+    agent_id = ensure_agent(agent_name)
+    blob = cred_crypto.encrypt_payload(payload if isinstance(payload, dict) else {"value": str(payload)})
+    host = _host(site) or site
+    _run_write(
+        """
+        INSERT INTO credentials (agent_id, site, encrypted_key)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (agent_id, site) DO UPDATE
+        SET encrypted_key = EXCLUDED.encrypted_key
+        """,
+        (agent_id, host, blob),
+    )
+
+
+def migrate_credentials():
+    """Rewrite legacy plaintext JSON rows as enc:v1 Fernet tokens."""
+    with _write_lock:
+        cur = _cursor(dict_cursor=True)
+        cur.execute("SELECT id, encrypted_key FROM credentials")
+        rows = list(cur.fetchall() or [])
+        cur.close()
+    for row in rows:
+        blob = row["encrypted_key"]
+        if cred_crypto.is_encrypted(blob):
+            continue
+        try:
+            payload = cred_crypto.decrypt_blob(blob)
+            sealed = cred_crypto.encrypt_payload(payload)
+        except Exception:
+            continue
+        _run_write(
+            "UPDATE credentials SET encrypted_key = %s WHERE id = %s",
+            (sealed, row["id"]),
+        )
+
+
+def get_credential(agent_name, site_or_url):
+    agent_id = ensure_agent(agent_name)
+    host = _host(site_or_url)
+    with _write_lock:
+        cur = _cursor(dict_cursor=True)
+        cur.execute(
+            "SELECT id, site, encrypted_key FROM credentials WHERE agent_id = %s",
+            (agent_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+    for row in rows:
+        site = (row["site"] or "").lower()
+        if not site:
+            continue
+        if host == site or host.endswith("." + site):
+            try:
+                data = cred_crypto.decrypt_blob(row["encrypted_key"])
+            except Exception:
+                return None
+            if not cred_crypto.is_encrypted(row["encrypted_key"]):
+                try:
+                    _run_write(
+                        "UPDATE credentials SET encrypted_key = %s WHERE id = %s",
+                        (cred_crypto.encrypt_payload(data), row["id"]),
+                    )
+                except Exception:
+                    pass
+            if isinstance(data, dict):
+                data.setdefault("site", site)
+                return data
+    return None
+
+
 def init_schema() -> bool:
     with _write_lock:
         cur = _cursor()
         cur.execute(SCHEMA_SQL)
         conn.commit()
         cur.close()
+    try:
+        migrate_credentials()
+    except Exception:
+        pass
     return True
 
 

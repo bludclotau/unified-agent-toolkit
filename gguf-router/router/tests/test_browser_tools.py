@@ -1,8 +1,12 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
+from cryptography.fernet import Fernet
+
+import cred_crypto
 from tools.browser import (
     browser_login,
     browser_read,
@@ -37,27 +41,45 @@ class BrowserToolTests(unittest.TestCase):
             calls.append(args)
             return {"code": 0, "stdout": "ok", "stderr": ""}
 
-        with tempfile.TemporaryDirectory() as directory:
-            import os
-            os.environ["BROWSER_CRED_DIR"] = directory
-            from tools.browser import AgentBrowser
-            browser = AgentBrowser(run=runner)
-            result = browser_login(
-                "wendy",
-                "https://example.com/login",
-                "ada",
-                "@e1",
-                "@e2",
-                "@e3",
-                password="s3cret",
-                browser=browser,
-            )
-            self.assertTrue(result["ok"])
-            self.assertNotIn("s3cret", json.dumps(result))
-            flat = json.dumps(calls)
-            self.assertIn("s3cret", flat)
-            stored = json.loads(Path(directory, "gguf-wendy", "logins.json").read_text())
-            self.assertEqual(stored["https://example.com"]["password"], "s3cret")
+        stored = {}
+
+        def persist(persona, origin, payload):
+            stored["persona"] = persona
+            stored["origin"] = origin
+            stored["payload"] = payload
+
+        from tools import browser as browser_mod
+        from tools.browser import AgentBrowser
+        original = browser_mod.persist_login
+        browser_mod.persist_login = persist
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                os.environ["BROWSER_CRED_DIR"] = directory
+                result = browser_login(
+                    "wendy",
+                    "https://example.com/login",
+                    "ada",
+                    "@e1",
+                    "@e2",
+                    "@e3",
+                    password="s3cret",
+                    browser=AgentBrowser(run=runner),
+                )
+                self.assertFalse((Path(directory) / "gguf-wendy" / "logins.json").exists())
+        finally:
+            browser_mod.persist_login = original
+        self.assertTrue(result["ok"])
+        self.assertNotIn("s3cret", json.dumps(result))
+        self.assertEqual(stored["payload"]["password"], "s3cret")
+        self.assertEqual(stored["origin"], "https://example.com")
+
+    def test_fernet_blob_hides_the_password(self):
+        os.environ["CREDENTIALS_KEY"] = Fernet.generate_key().decode()
+        cred_crypto.reset_for_tests()
+        blob = cred_crypto.encrypt_payload({"username": "wendy", "password": "snacktime"})
+        self.assertTrue(blob.startswith("enc:v1:"))
+        self.assertNotIn("snacktime", blob)
+        self.assertEqual(cred_crypto.decrypt_blob(blob)["password"], "snacktime")
 
     def test_read_opens_then_snapshots(self):
         calls = []
@@ -128,11 +150,24 @@ class BrowserToolTests(unittest.TestCase):
         self.assertFalse(result["ok"])
 
     def test_saved_login_roundtrip_without_repeating_the_password_to_the_model(self):
-        with tempfile.TemporaryDirectory() as directory:
-            import os
-            os.environ["BROWSER_CRED_DIR"] = directory
-            origin = save_login("wendy", "https://example.com/in", "ada", "hidden")
-            self.assertEqual(origin, "https://example.com")
+        from tools import browser as browser_mod
+        captured = {}
+
+        def persist(persona, origin, payload):
+            captured["payload"] = payload
+            captured["origin"] = origin
+
+        original = browser_mod.persist_login
+        browser_mod.persist_login = persist
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                os.environ["BROWSER_CRED_DIR"] = directory
+                origin = save_login("wendy", "https://example.com/in", "ada", "hidden")
+                self.assertFalse(list(Path(directory).rglob("logins.json")))
+        finally:
+            browser_mod.persist_login = original
+        self.assertEqual(origin, "https://example.com")
+        self.assertEqual(captured["payload"]["password"], "hidden")
 
 
 if __name__ == "__main__":
