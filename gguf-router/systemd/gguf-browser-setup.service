@@ -1,0 +1,14 @@
+[Unit]
+Description=Install agent-browser, Playwright Chromium, and the router tool env
+After=network-online.target
+Before=gguf-router.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/home/wendy/waffle_house/unified-agent-toolkit/scripts/bootstrap-browser.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -209,6 +209,122 @@ $("toolFetch").onclick = async () => {
   }
 };
 
+function toolToken() {
+  const value = $("toolToken").value.trim();
+  if (value) sessionStorage.setItem("keyhole.toolToken", value);
+  return sessionStorage.getItem("keyhole.toolToken") || "";
+}
+
+$("toolToken").value = sessionStorage.getItem("keyhole.toolToken") || "";
+
+function authHeaders() {
+  const token = toolToken();
+  return token
+    ? { Authorization: "Bearer " + token, "X-Tool-Token": token, "Content-Type": "application/json" }
+    : { "Content-Type": "application/json" };
+}
+
+$("integrationRefresh").onclick = async () => {
+  const token = toolToken();
+  if (!token) {
+    $("integrationStatus").textContent = "Paste the orchestrator API token first.";
+    return;
+  }
+  $("integrationStatus").textContent = "loading…";
+  try {
+    const res = await fetch("/api/orchestrator/integrations", { headers: authHeaders() });
+    const body = await res.json();
+    if (!res.ok) {
+      $("integrationStatus").textContent = JSON.stringify(body);
+      return;
+    }
+    const interesting = ["agent-browser", "browser-agent", "browser-use"];
+    const lines = interesting.map((name) => {
+      const row = body[name] || {};
+      return `${name}: ready=${Boolean(row.ready)} primary=${Boolean(row.primary)} ${row.role || ""}`;
+    });
+    $("integrationStatus").textContent = lines.join("\n");
+  } catch (err) {
+    $("integrationStatus").textContent = String(err);
+  }
+};
+
+function browserArgs() {
+  const action = $("browserAction").value;
+  const args = {};
+  const url = $("browserUrl").value.trim();
+  const ref = $("browserRef").value.trim();
+  const text = $("browserText").value.trim();
+  if (url) args.url = url;
+  if (ref) args.ref = ref;
+  if (action === "browser_plan") args.goal = text;
+  else if (text) args.text = text;
+  if (action === "browser_login") {
+    args.username = $("browserUser").value.trim();
+    if ($("browserPass").value) args.password = $("browserPass").value;
+    if ($("browserUserRef").value.trim()) args.username_ref = $("browserUserRef").value.trim();
+    if ($("browserPassRef").value.trim()) args.password_ref = $("browserPassRef").value.trim();
+    if (ref) args.submit_ref = ref;
+  }
+  return args;
+}
+
+$("browserRun").onclick = async () => {
+  if (!toolToken()) {
+    $("browserOut").textContent = "Paste the orchestrator API token first.";
+    return;
+  }
+  $("browserOut").textContent = "running…";
+  $("browserRun").disabled = true;
+  try {
+    const res = await fetch("/api/router/tool", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        tool: $("browserAction").value,
+        persona: $("browserPersona").value.trim() || "wendy",
+        args: browserArgs(),
+        user_id: "keyhole",
+        bot_name: "keyhole",
+      }),
+    });
+    const body = await res.json();
+    $("browserOut").textContent = JSON.stringify(body, null, 2);
+    const text = body?.result?.stdout || body?.result?.final || "";
+    if (text) state.toolContext = String(text).slice(0, 4000);
+  } catch (err) {
+    $("browserOut").textContent = String(err);
+  } finally {
+    $("browserRun").disabled = false;
+    $("browserPass").value = "";
+  }
+};
+
+async function orchestratorInvoke(name, payload) {
+  if (!toolToken()) {
+    $("browserOut").textContent = "Paste the orchestrator API token first.";
+    return;
+  }
+  $("browserOut").textContent = "running…";
+  const res = await fetch("/api/orchestrator/integrations/" + name + "/invoke", {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json();
+  $("browserOut").textContent = JSON.stringify(body, null, 2);
+}
+
+$("agentSnapshot").onclick = () => orchestratorInvoke("agent-browser", {
+  action: "snapshot",
+  url: $("browserUrl").value.trim(),
+  persona: $("browserPersona").value.trim() || "wendy",
+}).catch((err) => { $("browserOut").textContent = String(err); });
+
+$("agentCliSnapshot").onclick = () => orchestratorInvoke("browser-agent", {
+  url: $("browserUrl").value.trim(),
+}).catch((err) => { $("browserOut").textContent = String(err); });
+
 $("toolAttach").onclick = () => {
   const j = state.toolRaw;
   const text = j?.result?.text || j?.result?.title || $("toolOut").textContent;
